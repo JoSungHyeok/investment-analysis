@@ -1,17 +1,16 @@
-const BASE = '/research';
 
 async function jsonRequest(path, options = {}) {
-  const response = await fetch(`${BASE}${path}`, options);
+  const response = await fetch(`/api/rag${path}`, options);
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.detail || payload.message || '요청을 처리하지 못했습니다.');
   return payload;
 }
 
-export function askResearch(question, { domain = 'finance', topK = 4, sessionId } = {}) {
-  return jsonRequest('/chat', {
+export function askResearch(question, { topK = 5, provider = 'rag' } = {}) {
+  return jsonRequest('/ask', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question, domain, top_k: topK, session_id: sessionId }),
+    body: JSON.stringify({ query: question, top_k: topK, provider }),
   });
 }
 

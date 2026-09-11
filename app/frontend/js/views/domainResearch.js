@@ -1,9 +1,15 @@
-import { mountResearch } from '../research/app.js';
-import { installTheory } from '../research/theory.js';
 
+import { ragChatView } from './ragChat.js';
+import { ragDocumentsView } from './ragDocuments.js';
+import { financialKnowledgeView } from './financialKnowledge.js';
+import { quantView } from './quant.js';
+import { financeTheoryView, basisLabView, financeCalendarView, stockAtlasView } from './nativeResearchViews.js';
+
+import { theoryAnalysisView } from './theoryAnalysis.js';
 const NEWS_RAG_HANDOFF_KEY = 'investment.news-rag-handoff';
 
 export const RESEARCH_PAGES = {
+  'research-ai-analysis': ['theory-ai', '이론 기반 AI 분석'],
   'domain-research': ['learn', 'AI 금융 질문'],
   'research-documents': ['documents', '학습 문서 등록'],
   'research-theory': ['theory', '4일 금융 이론'],
@@ -12,120 +18,41 @@ export const RESEARCH_PAGES = {
   'research-basis': ['basis', '선물 베이시스'],
   'research-backtest': ['backtest', 'LEAN 전략 실행'],
   'research-calendar': ['calendar', '금융 캘린더'],
-  ...Object.fromEntries(['선물 · 옵션', '펀드 · ETF', '채권 · 코인', '자산배분 · 퀀트'].map((name, i) => [`research-day-${i + 1}`, [`day-${i + 1}`, `${i + 1}일차 · ${name}`]])),
+  ...Object.fromEntries(['선물 · 옵션','펀드 · ETF','채권 · 코인','자산배분 · 퀀트']
+    .map((name,i)=>[`research-day-${i+1}`,[`day-${i+1}`,`${i+1}일차 · ${name}`]])),
 };
 
-function consumeNewsHandoff(root, page) {
-  if (page !== 'domain-research') return;
-  let payload;
+function consumeNewsHandoff(app) {
   try {
     const raw = sessionStorage.getItem(NEWS_RAG_HANDOFF_KEY);
     if (!raw) return;
-    payload = JSON.parse(raw);
-  } catch (error) {
-    console.warn('기사 분석 요청을 읽지 못했습니다.', error);
-    return;
-  }
-  if (!payload?.prompt || typeof payload.prompt !== 'string') return;
-  const input = root.getElementById('questionInput');
-  const sendButton = root.getElementById('sendBtn');
-  if (!input || !sendButton) return;
-  sessionStorage.removeItem(NEWS_RAG_HANDOFF_KEY);
-  input.value = payload.prompt;
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-  input.focus();
-  queueMicrotask(() => sendButton.click());
-}
-
-function createContext(root, body, initialView, onView) {
-  const controller = new AbortController();
-  const timers = new Set();
-  const intervals = new Set();
-  const frames = new Set();
-  const charts = new Set();
-  const nativeDocument = globalThis.document;
-  const scopedDocument = new Proxy(nativeDocument, {
-    get(target, key) {
-      if (key === 'body') return body;
-      if (['querySelector', 'querySelectorAll', 'getElementById'].includes(key)) return root[key].bind(root);
-      if (key === 'addEventListener') return (type, fn, options = {}) => root.addEventListener(type, fn, { ...(typeof options === 'boolean' ? { capture: options } : options), signal: controller.signal });
-      const value = Reflect.get(target, key, target);
-      return typeof value === 'function' ? value.bind(target) : value;
-    },
-  });
-  const trackedCharts = globalThis.ApexCharts ? class extends globalThis.ApexCharts {
-    constructor(...args) { super(...args); charts.add(this); }
-    destroy() { charts.delete(this); return super.destroy(); }
-  } : undefined;
-  const values = { API_BASE: '/research', ApexCharts: trackedCharts };
-  const scopedWindow = new Proxy(values, { get(target, key) { return key in target ? target[key] : globalThis[key]; } });
-  installTheory(scopedWindow);
-  return {
-    document: scopedDocument, window: scopedWindow, ApexCharts: trackedCharts,
-    initialView: initialView.startsWith('day-') ? 'theory' : initialView,
-    initialDay: initialView.startsWith('day-') ? Number(initialView.slice(4)) : null,
-    onView,
-    fetch: (url, options = {}) => globalThis.fetch(url, { ...options, signal: controller.signal }),
-    setTimeout(fn, delay) { const id = globalThis.setTimeout(() => { timers.delete(id); fn(); }, delay); timers.add(id); return id; },
-    clearTimeout(id) { timers.delete(id); globalThis.clearTimeout(id); },
-    setInterval(fn, delay) { const id = globalThis.setInterval(fn, delay); intervals.add(id); return id; },
-    clearInterval(id) { intervals.delete(id); globalThis.clearInterval(id); },
-    requestAnimationFrame(fn) { const id = globalThis.requestAnimationFrame(() => { frames.delete(id); fn(); }); frames.add(id); return id; },
-    dispose() {
-      controller.abort();
-      timers.forEach(id => globalThis.clearTimeout(id));
-      intervals.forEach(id => globalThis.clearInterval(id));
-      frames.forEach(id => globalThis.cancelAnimationFrame(id));
-      charts.forEach(chart => { try { chart.destroy(); } catch {} });
-    },
-  };
+    const payload = JSON.parse(raw);
+    const input = app.querySelector('#rag-input');
+    const form = app.querySelector('#rag-form');
+    if (!payload?.prompt || !input || !form) return;
+    sessionStorage.removeItem(NEWS_RAG_HANDOFF_KEY);
+    input.value = payload.prompt;
+    queueMicrotask(() => form.requestSubmit());
+  } catch {}
 }
 
 export async function domainResearchView(app, page = 'domain-research') {
-  const [view, label] = RESEARCH_PAGES[page] || RESEARCH_PAGES['domain-research'];
-  document.title = `${label} · JSH Learning`;
-  app.innerHTML = '<p role="status">JSH Learning 금융 학습 기능을 불러오고 있습니다…</p>';
-  const abort = new AbortController();
-  let context;
-  window._viewCleanup = () => { abort.abort(); context?.dispose(); };
-  try {
-    const response = await fetch('/js/research/shell.html', { signal: abort.signal });
-    if (!response.ok) throw new Error('화면을 불러오지 못했습니다.');
-    const html = await response.text();
-    if (abort.signal.aborted) return;
-    const host = document.createElement('section');
-    host.className = 'jsh-learning-module jsh-learning-research';
-    host.setAttribute('aria-label', label);
-    const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML = `<link rel="stylesheet" href="/js/research/style.css">
-      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-      <link rel="stylesheet" href="/js/research/integration.css">
-      <div class="domain-body">${html}</div>`;
-    app.replaceChildren(host);
-    const body = root.querySelector('.domain-body');
-    const onView = active => {
-      body.dataset.integratedView = active;
-      const match = Object.entries(RESEARCH_PAGES).find(([, value]) => value[0] === active);
-      if (!match) return;
-      const [, activeLabel] = match[1];
-      host.setAttribute('aria-label', activeLabel);
-      document.title = `${activeLabel} · JSH Learning`;
-      const breadcrumb = document.getElementById('breadcrumb');
-      if (breadcrumb) breadcrumb.textContent = activeLabel;
-      document.querySelectorAll('.nav-item[data-view]').forEach(link => link.classList.toggle('active', link.dataset.view === match[0]));
-      const url = new URL(location.href); url.searchParams.set('view', match[0]);
-      history.replaceState(null, '', url);
-    };
-    context = createContext(root, body, view, onView);
-    mountResearch(context);
-    consumeNewsHandoff(root, page);
-  } catch (error) {
-    if (abort.signal.aborted) return;
-    context?.dispose();
-    app.replaceChildren();
-    const message = document.createElement('p'); message.setAttribute('role', 'alert');
-    message.textContent = 'JSH Learning 금융 학습 기능을 불러오지 못했습니다. 메뉴를 다시 선택해 주세요.';
-    app.append(message);
-    console.error(error);
+  if (page === 'research-ai-analysis') {
+    return theoryAnalysisView(app);
   }
+
+  const label = RESEARCH_PAGES[page]?.[1] || 'AI 금융 질문';
+  document.title = `${label} · JSH Learning`;
+  window._viewCleanup = null;
+
+  if (page === 'domain-research') { ragChatView(app); consumeNewsHandoff(app); return; }
+  if (page === 'research-documents') return ragDocumentsView(app);
+  if (page === 'research-theory') return financeTheoryView(app);
+  if (/^research-day-[1-4]$/.test(page)) return financeTheoryView(app, Number(page.slice(-1)));
+  if (page === 'research-stocks') return stockAtlasView(app);
+  if (page === 'research-simulation') return financialKnowledgeView(app);
+  if (page === 'research-basis') return basisLabView(app);
+  if (page === 'research-backtest') return quantView(app);
+  if (page === 'research-calendar') return financeCalendarView(app);
+  ragChatView(app);
 }

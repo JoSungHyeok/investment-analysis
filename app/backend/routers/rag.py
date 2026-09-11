@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import io
+import uuid
 import json
 import math
 import os
@@ -8,7 +10,7 @@ import re
 import urllib.error
 import urllib.request
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 router = APIRouter()
@@ -117,6 +119,20 @@ class RagAskRequest(RagSearchRequest):
     provider: str = Field(default="rag", pattern="^(rag|openai_compatible)$", description="답변 다듬기에 사용할 외부 AI 모듈")
 
 
+class TheoryAnalysisRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+    perspective: str = Field(default="자동 선택", max_length=80)
+    theory_context: str = Field(min_length=1, max_length=30000)
+
+
+class RagIngestTextRequest(BaseModel):
+    document_id: str = Field(min_length=1, max_length=120)
+    title: str = Field(min_length=1, max_length=300)
+    content: str = Field(min_length=1, max_length=500000)
+    domain: str = Field(default="finance", max_length=40)
+
+
+
 def _search(query: str, top_k: int, score_threshold: float) -> list[dict[str, object]]:
     payload: dict[str, object] = {"vector": _embed_query(query), "limit": top_k, "with_payload": True, "with_vector": False}
     if score_threshold > 0:
@@ -141,6 +157,51 @@ def _require_qdrant() -> None:
             "`docker compose --profile tools run --rm docs-index`로 학습 문서를 먼저 색인하세요.",
         )
 
+
+
+def _ensure_collection(vector_size: int) -> None:
+    if _qdrant_collection_available():
+        return
+    if not _qdrant_available():
+        raise HTTPException(503, f"Qdrant 서버에 연결할 수 없습니다 ({_QDRANT_URL}).")
+    _qdrant_request("PUT", f"/collections/{_QDRANT_COLLECTION}", {
+        "vectors": {"size": vector_size, "distance": "Cosine"}
+    })
+
+def _split_document(text: str, size: int = 900, overlap: int = 150) -> list[str]:
+    cleaned = re.sub(r"\r\n?", "\n", text).strip()
+    if not cleaned:
+        return []
+    output, start = [], 0
+    while start < len(cleaned):
+        end = min(len(cleaned), start + size)
+        chunk = cleaned[start:end].strip()
+        if chunk:
+            output.append(chunk)
+        if end >= len(cleaned):
+            break
+        start = max(start + 1, end - overlap)
+    return output
+
+def _ingest_document(document_id: str, title: str, content: str, domain: str) -> dict[str, object]:
+    pieces = _split_document(content)
+    if not pieces:
+        raise HTTPException(400, "등록할 텍스트가 없습니다.")
+    vectors = [_embed_query(piece) for piece in pieces]
+    _ensure_collection(len(vectors[0]))
+    points = [{
+        "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"jsh-learning:{document_id}:{i}")),
+        "vector": vector,
+        "payload": {
+            "source_doc": title, "document_id": document_id, "section": title,
+            "chunk_index": i, "text": piece, "domain": domain, "source": "jsh-learning-upload"
+        },
+    } for i, (piece, vector) in enumerate(zip(pieces, vectors))]
+    for offset in range(0, len(points), 32):
+        _qdrant_request("PUT", f"/collections/{_QDRANT_COLLECTION}/points?wait=true",
+                        {"points": points[offset:offset+32]})
+    return {"document_id": document_id, "title": title, "chunks": len(points),
+            "domain": domain, "embed_method": _embedding_method()}
 
 def _cite(chunk: dict[str, object]) -> str:
     doc = str(chunk.get("source_doc", ""))
@@ -233,6 +294,98 @@ def rag_ask(req: RagAskRequest) -> dict[str, object]:
         "source_count": len(chunks),
     }
 
+
+
+
+@router.post("/api/rag/theory-analysis")
+def rag_theory_analysis(
+    req: TheoryAnalysisRequest,
+) -> dict[str, object]:
+    """JSH Learning 금융 이론 기반 AI 분석."""
+
+    theory_context = req.theory_context.strip()
+
+    if not theory_context:
+        raise HTTPException(
+            status_code=400,
+            detail="분석할 금융 이론이 없습니다.",
+        )
+
+    query = (
+        f"분석 관점: {req.perspective}\n"
+        f"사용자 질문: {req.question}\n\n"
+        "아래 JSH Learning 금융 이론을 최우선 근거로 "
+        "사용하여 분석하세요.\n\n"
+        "다음 순서로 답변하세요.\n"
+        "1. 적용한 이론\n"
+        "2. 질문에 대한 이론적 해석\n"
+        "3. AI 분석\n"
+        "4. 반대 관점 또는 한계\n"
+        "5. 추가로 확인할 항목\n"
+        "6. 결론\n\n"
+        "제공된 이론에 없는 최신 주가, 실적, 뉴스 등을 "
+        "알고 있는 것처럼 단정하지 마세요. "
+        "매수·매도 지시보다는 위험과 판단 기준을 설명하세요."
+    )
+
+    chunks = [
+        {
+            "source_doc": "JSH Learning 4일 금융 이론",
+            "section": req.perspective,
+            "chunk_index": 0,
+            "text": theory_context,
+            "score": 1.0,
+        }
+    ]
+
+    try:
+        answer = _openai_compatible_answer(
+            query,
+            chunks,
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"AI 분석 생성 실패: {exc}",
+        ) from exc
+
+    return {
+        "question": req.question,
+        "perspective": req.perspective,
+        "answer": answer,
+        "source": "JSH Learning 4일 금융 이론",
+    }
+
+
+@router.post("/api/rag/ingest/text")
+def rag_ingest_text(req: RagIngestTextRequest) -> dict[str, object]:
+    return _ingest_document(req.document_id, req.title, req.content, req.domain)
+
+@router.post("/api/rag/ingest/file")
+async def rag_ingest_file(file: UploadFile = File(...), domain: str = Form("finance")) -> dict[str, object]:
+    filename = (file.filename or "uploaded-file").strip()
+    raw = await file.read()
+    if len(raw) > 10 * 1024 * 1024:
+        raise HTTPException(413, "파일은 10MB 이하만 등록할 수 있습니다.")
+    suffix = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+    if suffix in {"txt", "md", "mdx"}:
+        try:
+            content = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(400, "텍스트 파일은 UTF-8 형식이어야 합니다.") from exc
+    elif suffix == "pdf":
+        try:
+            from pypdf import PdfReader
+            content = "\n\n".join((p.extract_text() or "") for p in PdfReader(io.BytesIO(raw)).pages)
+        except Exception as exc:
+            raise HTTPException(400, f"PDF를 읽지 못했습니다: {exc}") from exc
+    else:
+        raise HTTPException(400, "TXT, MD, MDX, PDF 파일만 지원합니다.")
+    return _ingest_document(hashlib.sha256(raw).hexdigest()[:24], filename, content, domain)
 
 @router.get("/api/rag/status")
 def rag_status() -> dict[str, object]:
