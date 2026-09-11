@@ -3,6 +3,8 @@ import { installTheory } from '../research/theory.js';
 
 const NEWS_RAG_HANDOFF_KEY = 'investment.news-rag-handoff';
 let researchShellHtml = null;
+let researchInstance = null;
+let pendingDisposeTimer = null;
 
 // 기존 하단 회사정보 푸터는 전체 학습 앱에서 사용하지 않는다.
 document.querySelector('.site-footer')?.remove();
@@ -26,6 +28,9 @@ async function loadResearchShell() {
   researchShellHtml = await response.text();
   return researchShellHtml;
 }
+
+// 앱 모듈이 로드되는 즉시 금융학습 셸을 백그라운드에서 미리 준비한다.
+loadResearchShell().catch((error) => console.warn('금융학습 사전 로드 실패', error));
 
 function consumeNewsHandoff(root, page) {
   if (page !== 'domain-research') return;
@@ -51,26 +56,14 @@ function consumeNewsHandoff(root, page) {
 
 function normalizeResearchReference(source) {
   const title = [source?.source_doc, source?.section].filter(Boolean).join(' · ') || '학습 문서';
-  return {
-    title,
-    score: Number(source?.score || 0),
-    content: source?.text || '',
-  };
+  return { title, score: Number(source?.score || 0), content: source?.text || '' };
 }
 
 async function researchFetch(url, options = {}, controller) {
   const requestUrl = typeof url === 'string' ? url : String(url?.url || url);
-
-  // 구형 금융학습 화면은 /research/chat을 사용했지만 현재 백엔드 RAG API는
-  // /api/rag/ask를 POST로 제공한다. 여기서 요청/응답 모양을 호환시킨다.
   if (requestUrl === '/research/chat' && String(options.method || 'GET').toUpperCase() === 'POST') {
     let legacyPayload = {};
-    try {
-      legacyPayload = options.body ? JSON.parse(options.body) : {};
-    } catch {
-      legacyPayload = {};
-    }
-
+    try { legacyPayload = options.body ? JSON.parse(options.body) : {}; } catch { legacyPayload = {}; }
     const response = await globalThis.fetch('/api/rag/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -82,20 +75,17 @@ async function researchFetch(url, options = {}, controller) {
       }),
       signal: controller.signal,
     });
-
     if (!response.ok) return response;
     const data = await response.json();
-    const mapped = {
+    return new Response(JSON.stringify({
       answer: data.answer || '관련 문서를 찾지 못했습니다.',
       references: (data.sources || []).map(normalizeResearchReference),
-    };
-    return new Response(JSON.stringify(mapped), {
+    }), {
       status: response.status,
       statusText: response.statusText,
       headers: { 'Content-Type': 'application/json' },
     });
   }
-
   return globalThis.fetch(url, { ...options, signal: controller.signal });
 }
 
@@ -143,19 +133,73 @@ function createContext(root, body, initialView, onView) {
   };
 }
 
+function updateOuterResearchState(page, label) {
+  const host = researchInstance?.host;
+  if (host) host.setAttribute('aria-label', label);
+  document.title = `${label} · JSH Learning`;
+  const breadcrumb = document.getElementById('breadcrumb');
+  if (breadcrumb) breadcrumb.textContent = label;
+  document.querySelectorAll('.nav-item[data-view]').forEach(link => link.classList.toggle('active', link.dataset.view === page));
+  const url = new URL(location.href);
+  url.searchParams.set('view', page);
+  history.replaceState(null, '', url);
+}
+
+function switchResearchPage(page) {
+  if (!researchInstance) return false;
+  const [view, label] = RESEARCH_PAGES[page] || RESEARCH_PAGES['domain-research'];
+  const { root } = researchInstance;
+
+  if (view.startsWith('day-')) {
+    const day = Number(view.slice(4));
+    const button = root.querySelector(`.theory-menu-btn[data-theory-day="${day}"]`);
+    if (!button) return false;
+    button.click();
+  } else {
+    const button = root.querySelector(`[data-research-bridge][data-view="${view}"], .brand-nav-btn[data-view="${view}"], [data-go="${view}"]`);
+    if (!button) return false;
+    button.click();
+  }
+
+  updateOuterResearchState(page, label);
+  consumeNewsHandoff(root, page);
+  return true;
+}
+
+function scheduleResearchDispose() {
+  if (pendingDisposeTimer) clearTimeout(pendingDisposeTimer);
+  pendingDisposeTimer = setTimeout(() => {
+    pendingDisposeTimer = null;
+    if (!researchInstance) return;
+    researchInstance.context?.dispose();
+    researchInstance = null;
+  }, 0);
+}
+
 export async function domainResearchView(app, page = 'domain-research') {
   const [view, label] = RESEARCH_PAGES[page] || RESEARCH_PAGES['domain-research'];
-  document.title = `${label} · JSH Learning`;
-  const abort = new AbortController();
-  let context;
-  window._viewCleanup = () => { abort.abort(); context?.dispose(); };
 
-  // 기존 화면을 바로 지우지 않고 새 금융학습 화면이 준비된 뒤 교체해
-  // 메뉴 클릭 시 흰 화면/로딩 문구가 순간적으로 나타나는 현상을 줄인다.
+  // navigate()가 기존 화면 cleanup을 먼저 호출하더라도 같은 이벤트 루프 안에서
+  // 다른 금융학습 메뉴로 이동하면 dispose 예약을 취소하고 기존 인스턴스를 재사용한다.
+  if (pendingDisposeTimer) {
+    clearTimeout(pendingDisposeTimer);
+    pendingDisposeTimer = null;
+  }
+
+  if (researchInstance) {
+    if (!app.contains(researchInstance.host)) app.replaceChildren(researchInstance.host);
+    if (switchResearchPage(page)) {
+      window._viewCleanup = scheduleResearchDispose;
+      return;
+    }
+    researchInstance.context?.dispose();
+    researchInstance = null;
+  }
+
+  document.title = `${label} · JSH Learning`;
   app.setAttribute('aria-busy', 'true');
   try {
     const html = await loadResearchShell();
-    if (abort.signal.aborted) return;
     const host = document.createElement('section');
     host.className = 'jsh-learning-module jsh-learning-research';
     host.setAttribute('aria-label', label);
@@ -163,30 +207,28 @@ export async function domainResearchView(app, page = 'domain-research') {
     root.innerHTML = `<link rel="stylesheet" href="/js/research/style.css">
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
       <link rel="stylesheet" href="/js/research/integration.css">
-      <div class="domain-body">${html}</div>`;
+      <div class="domain-body">${html}<button type="button" class="brand-nav-btn" data-research-bridge data-view="theory" hidden></button><button type="button" class="brand-nav-btn" data-research-bridge data-view="documents" hidden></button></div>`;
     const body = root.querySelector('.domain-body');
     const onView = active => {
       body.dataset.integratedView = active;
       const match = Object.entries(RESEARCH_PAGES).find(([, value]) => value[0] === active);
       if (!match) return;
-      const [, activeLabel] = match[1];
-      host.setAttribute('aria-label', activeLabel);
-      document.title = `${activeLabel} · JSH Learning`;
-      const breadcrumb = document.getElementById('breadcrumb');
-      if (breadcrumb) breadcrumb.textContent = activeLabel;
-      document.querySelectorAll('.nav-item[data-view]').forEach(link => link.classList.toggle('active', link.dataset.view === match[0]));
-      const url = new URL(location.href); url.searchParams.set('view', match[0]);
-      history.replaceState(null, '', url);
+      const [activePage, [, activeLabel]] = match;
+      updateOuterResearchState(activePage, activeLabel);
     };
-    context = createContext(root, body, view, onView);
+    const context = createContext(root, body, view, onView);
+    researchInstance = { host, root, body, context };
     mountResearch(context);
     app.replaceChildren(host);
+    updateOuterResearchState(page, label);
     consumeNewsHandoff(root, page);
+    window._viewCleanup = scheduleResearchDispose;
   } catch (error) {
-    if (abort.signal.aborted) return;
-    context?.dispose();
+    researchInstance?.context?.dispose();
+    researchInstance = null;
     app.replaceChildren();
-    const message = document.createElement('p'); message.setAttribute('role', 'alert');
+    const message = document.createElement('p');
+    message.setAttribute('role', 'alert');
     message.textContent = 'JSH Learning 금융 학습 기능을 불러오지 못했습니다. 메뉴를 다시 선택해 주세요.';
     app.append(message);
     console.error(error);
