@@ -4,12 +4,32 @@
  */
 const DESKTOP_BREAKPOINT = 1024;
 let _sidebarOpen = window.innerWidth > DESKTOP_BREAKPOINT;
-const MENU_SECTION_ORDER = ['review', 'learn', 'quiz', 'visualization', 'portfolio', 'quant'];
+const MENU_SECTION_ORDER = ['paper-tools', 'review', 'learn', 'quiz', 'visualization', 'portfolio', 'quant'];
 
-// SPA와 정적 페이지가 같은 메뉴 순서를 유지하도록 실제 DOM 순서를 맞춘다.
+function ensurePaperTools() {
+  const nav = document.querySelector('.sidebar-nav');
+  if (!nav || nav.querySelector('#nav-paper-tools')) return;
+  const inPages = window.location.pathname.includes('/pages/');
+  const prefix = inPages ? '' : 'pages/';
+  const tools = document.createElement('div');
+  tools.className = 'nav-section';
+  tools.innerHTML = `
+    <button class="nav-section-hdr" onclick="toggleNav('paper-tools')">
+      <span><i class="fa-solid fa-money-bill-trend-up"></i>모의투자 · 실습</span>
+      <i class="fa-solid fa-chevron-down nav-chev" id="chev-paper-tools"></i>
+    </button>
+    <div class="nav-children" id="nav-paper-tools">
+      <a href="${prefix}paper-trading.html" class="nav-item" data-page="paper-trading"><i class="fa-solid fa-arrow-right-arrow-left"></i>주식·코인 모의투자</a>
+      <a href="${prefix}avg-down.html" class="nav-item" data-page="avg-down"><i class="fa-solid fa-calculator"></i>물타기 계산기</a>
+      <a href="/docs" target="_blank" rel="noopener" class="nav-item"><i class="fa-solid fa-code"></i>OpenAPI · Swagger</a>
+    </div>`;
+  nav.prepend(tools);
+}
+
 function orderSidebarSections() {
   const nav = document.querySelector('.sidebar-nav');
   if (!nav) return;
+  ensurePaperTools();
 
   const sections = new Map(
     [...nav.querySelectorAll(':scope > .nav-section')].map((section) => {
@@ -22,7 +42,6 @@ function orderSidebarSections() {
     if (section) nav.append(section);
   });
 
-  // RAG는 보조 기능이므로 모든 학습·분석 메뉴 다음, 메뉴의 마지막에 둔다.
   const rag = nav.querySelector(':scope > .nav-item[data-view="rag-chat"]');
   if (rag) nav.append(rag);
 }
@@ -82,7 +101,6 @@ function ensureSidebarChatbot() {
     event.preventDefault();
     const question = input?.value.trim();
     if (!question || !messages) return;
-
     appendMessage(question, 'is-user');
     input.value = '';
     input.disabled = true;
@@ -109,7 +127,6 @@ function ensureSidebarChatbot() {
 }
 window._ensureSidebarChatbot = ensureSidebarChatbot;
 
-// ── Enterprise 안내 모달 (회원가입/로그인 클릭 시) ──
 function openEnterpriseModal() {
   const overlay = document.getElementById('enterprise-modal-overlay');
   if (!overlay) return;
@@ -150,28 +167,24 @@ function toggleSidebar() {
 function openSidebar() {
   document.getElementById('sidebar').classList.add('open');
   document.body.classList.remove('sidebar-collapsed');
-  if (window.innerWidth <= DESKTOP_BREAKPOINT) {
-    document.getElementById('overlay').classList.add('show');
-  }
+  if (window.innerWidth <= DESKTOP_BREAKPOINT) document.getElementById('overlay').classList.add('show');
   _sidebarOpen = true;
   syncSidebarToggle();
 }
 function closeSidebar() {
   document.getElementById('sidebar').classList.remove('open');
   document.getElementById('overlay').classList.remove('show');
-  if (window.innerWidth > DESKTOP_BREAKPOINT) {
-    document.body.classList.add('sidebar-collapsed');
-  }
+  if (window.innerWidth > DESKTOP_BREAKPOINT) document.body.classList.add('sidebar-collapsed');
   _sidebarOpen = false;
   syncSidebarToggle();
 }
 function toggleNav(id) {
   const el = document.getElementById('nav-' + id);
   const chev = document.getElementById('chev-' + id);
+  if (!el) return;
   const open = el.classList.toggle('open');
   if (chev) chev.style.transform = open ? 'rotate(180deg)' : '';
 }
-// auto-open a section (e.g. quiz/learn while that view is active)
 window._openNavSection = function(id) {
   const el = document.getElementById('nav-' + id);
   const chev = document.getElementById('chev-' + id);
@@ -180,7 +193,6 @@ window._openNavSection = function(id) {
     if (chev) chev.style.transform = 'rotate(180deg)';
   }
 };
-// close every section (used before opening only the section(s) currently in use)
 function closeAllNavSections() {
   document.querySelectorAll('.nav-children').forEach((el) => {
     el.classList.remove('open');
@@ -188,7 +200,6 @@ function closeAllNavSections() {
     if (chev) chev.style.transform = '';
   });
 }
-// close everything, then open only the section(s) relevant to the current view
 window._setActiveNavSections = function(ids) {
   closeAllNavSections();
   (ids || []).forEach((id) => window._openNavSection(id));
@@ -197,7 +208,6 @@ window._setActiveNavSections = function(ids) {
 window.addEventListener('resize', () => {
   const isMobile = window.innerWidth <= DESKTOP_BREAKPOINT;
   document.getElementById('overlay').classList.remove('show');
-
   if (isMobile) {
     document.body.classList.remove('sidebar-collapsed');
     document.getElementById('sidebar').classList.remove('open');
@@ -206,13 +216,10 @@ window.addEventListener('resize', () => {
     document.getElementById('sidebar').classList.toggle('open', !document.body.classList.contains('sidebar-collapsed'));
     _sidebarOpen = !document.body.classList.contains('sidebar-collapsed');
   }
-
   syncSidebarToggle();
 });
 
-if (window.innerWidth > DESKTOP_BREAKPOINT) {
-  document.getElementById('sidebar').classList.add('open');
-}
+if (window.innerWidth > DESKTOP_BREAKPOINT) document.getElementById('sidebar').classList.add('open');
 orderSidebarSections();
 ensureSidebarChatbot();
 syncSidebarToggle();
