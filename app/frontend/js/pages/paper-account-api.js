@@ -23,6 +23,10 @@ export function hasPaperLogin() {
   return Boolean(localStorage.getItem(TOKEN_KEY));
 }
 
+export function fetchPaperQuotes() {
+  return request('/api/auth/paper/quotes');
+}
+
 export function fetchPaperAccount() {
   return request('/api/auth/paper/account');
 }
