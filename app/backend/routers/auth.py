@@ -148,3 +148,13 @@ async def activity(limit: int = 30, user: dict = Depends(current_user)) -> dict:
     limit = max(1, min(limit, 100))
     rows = await get_db().user_activity.find({"user_id": user["_id"]}, {"_id": 0}).sort("created_at", -1).to_list(limit)
     return {"items": [{**row, "created_at": row["created_at"].isoformat()} for row in rows]}
+
+
+# 인증 라우터는 main.py에서 이미 등록되어 있다. 모의투자 하위 라우터를 여기에서
+# 결합하면 거대한 main.py를 수정하지 않고도 /api/auth/paper/* 엔드포인트를 노출할 수 있다.
+try:
+    from .paper import build_router as build_paper_router
+except ImportError:
+    from routers.paper import build_router as build_paper_router  # type: ignore
+
+router.include_router(build_paper_router(current_user))
