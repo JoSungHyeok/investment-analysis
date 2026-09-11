@@ -4,10 +4,10 @@ import { installTheory } from '../research/theory.js';
 const NEWS_RAG_HANDOFF_KEY = 'investment.news-rag-handoff';
 
 export const RESEARCH_PAGES = {
-  'domain-research': ['learn', '금융 RAG 질문'],
-  'research-documents': ['documents', 'RAG 문서 등록'],
+  'domain-research': ['learn', 'AI 금융 질문'],
+  'research-documents': ['documents', '학습 문서 등록'],
   'research-theory': ['theory', '4일 금융 이론'],
-  'research-stocks': ['stocks', '금융 종목 아틀라스'],
+  'research-stocks': ['stocks', '종목 아틀라스'],
   'research-simulation': ['simulation', '자산배분 실습'],
   'research-basis': ['basis', '선물 베이시스'],
   'research-backtest': ['backtest', 'LEAN 전략 실행'],
@@ -22,7 +22,6 @@ function consumeNewsHandoff(root, page) {
     const raw = sessionStorage.getItem(NEWS_RAG_HANDOFF_KEY);
     if (!raw) return;
     payload = JSON.parse(raw);
-    sessionStorage.removeItem(NEWS_RAG_HANDOFF_KEY);
   } catch (error) {
     console.warn('기사 분석 요청을 읽지 못했습니다.', error);
     return;
@@ -31,15 +30,13 @@ function consumeNewsHandoff(root, page) {
   const input = root.getElementById('questionInput');
   const sendButton = root.getElementById('sendBtn');
   if (!input || !sendButton) return;
+  sessionStorage.removeItem(NEWS_RAG_HANDOFF_KEY);
   input.value = payload.prompt;
   input.dispatchEvent(new Event('input', { bubbles: true }));
   input.focus();
-  // mountResearch가 모든 이벤트를 연결한 다음 클릭을 발생시켜 기존 채팅 흐름을 그대로 사용한다.
   queueMicrotask(() => sendButton.click());
 }
 
-// Original code uses document selectors. Scope those selectors and all lifecycle
-// resources to this view, keeping the investment shell and its IDs untouched.
 function createContext(root, body, initialView, onView) {
   const controller = new AbortController();
   const timers = new Set();
@@ -86,7 +83,8 @@ function createContext(root, body, initialView, onView) {
 
 export async function domainResearchView(app, page = 'domain-research') {
   const [view, label] = RESEARCH_PAGES[page] || RESEARCH_PAGES['domain-research'];
-  app.innerHTML = '<p role="status">금융 학습 기능을 불러오고 있습니다…</p>';
+  document.title = `${label} · JSH Learning`;
+  app.innerHTML = '<p role="status">JSH Learning 금융 학습 기능을 불러오고 있습니다…</p>';
   const abort = new AbortController();
   let context;
   window._viewCleanup = () => { abort.abort(); context?.dispose(); };
@@ -96,6 +94,7 @@ export async function domainResearchView(app, page = 'domain-research') {
     const html = await response.text();
     if (abort.signal.aborted) return;
     const host = document.createElement('section');
+    host.className = 'jsh-learning-module jsh-learning-research';
     host.setAttribute('aria-label', label);
     const root = host.attachShadow({ mode: 'open' });
     root.innerHTML = `<link rel="stylesheet" href="/js/research/style.css">
@@ -108,9 +107,11 @@ export async function domainResearchView(app, page = 'domain-research') {
       body.dataset.integratedView = active;
       const match = Object.entries(RESEARCH_PAGES).find(([, value]) => value[0] === active);
       if (!match) return;
-      host.setAttribute('aria-label', match[1][1]);
+      const [, activeLabel] = match[1];
+      host.setAttribute('aria-label', activeLabel);
+      document.title = `${activeLabel} · JSH Learning`;
       const breadcrumb = document.getElementById('breadcrumb');
-      if (breadcrumb) breadcrumb.textContent = match[1][1];
+      if (breadcrumb) breadcrumb.textContent = activeLabel;
       document.querySelectorAll('.nav-item[data-view]').forEach(link => link.classList.toggle('active', link.dataset.view === match[0]));
       const url = new URL(location.href); url.searchParams.set('view', match[0]);
       history.replaceState(null, '', url);
@@ -123,7 +124,7 @@ export async function domainResearchView(app, page = 'domain-research') {
     context?.dispose();
     app.replaceChildren();
     const message = document.createElement('p'); message.setAttribute('role', 'alert');
-    message.textContent = '금융 학습 기능을 불러오지 못했습니다. 메뉴를 다시 선택해 주세요.';
+    message.textContent = 'JSH Learning 금융 학습 기능을 불러오지 못했습니다. 메뉴를 다시 선택해 주세요.';
     app.append(message);
     console.error(error);
   }
