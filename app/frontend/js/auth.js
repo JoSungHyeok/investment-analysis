@@ -1,6 +1,16 @@
 const TOKEN_KEY = 'investment_analysis_auth_token';
 let user = null;
 
+function applyJshLearningBranding() {
+  document.title = 'JSH Learning';
+  const brandName = document.querySelector('.brand-name');
+  const brandSub = document.querySelector('.brand-sub');
+  const brandButton = document.querySelector('.brand');
+  if (brandName) brandName.textContent = 'JSH Learning';
+  if (brandSub) brandSub.textContent = '투자 · 금융 학습 플랫폼';
+  if (brandButton) brandButton.setAttribute('aria-label', 'JSH Learning 대시보드로 이동');
+}
+
 function token() { return localStorage.getItem(TOKEN_KEY); }
 function headers() { return token() ? { Authorization: `Bearer ${token()}` } : {}; }
 
@@ -74,10 +84,11 @@ export async function recordUsage(view) {
 }
 
 export async function initAuth() {
+  applyJshLearningBranding();
   document.body.insertAdjacentHTML('beforeend', `
     <div id="auth-modal" class="auth-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title" hidden>
       <section class="auth-modal"><button type="button" class="auth-modal-close" aria-label="닫기"><i class="fa-solid fa-xmark"></i></button>
-        <div data-auth-panel="form"><h2 id="auth-modal-title">내 투자 학습 계정</h2><p>로그인하면 메뉴 이용 내역이 내 계정에 저장됩니다.</p>
+        <div data-auth-panel="form"><h2 id="auth-modal-title">JSH Learning 계정</h2><p>로그인하면 학습 메뉴 이용 내역이 내 계정에 저장됩니다.</p>
           <div class="auth-tabs"><button type="button" data-auth-mode="login" class="active">로그인</button><button type="button" data-auth-mode="signup">회원가입</button></div>
           <form id="auth-form" data-mode="login"><label>이메일<input id="auth-email" type="email" required autocomplete="email"></label><label id="auth-username-field" hidden>이름<input id="auth-username" minlength="2" maxlength="30" autocomplete="name"></label><label>비밀번호<input id="auth-password" type="password" minlength="8" required autocomplete="current-password"></label><p id="auth-error" class="auth-error" aria-live="polite"></p><button id="auth-submit" class="auth-submit" type="submit">로그인</button></form>
         </div>
