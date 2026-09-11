@@ -1,6 +1,8 @@
 import { mountResearch } from '../research/app.js';
 import { installTheory } from '../research/theory.js';
 
+const NEWS_RAG_HANDOFF_KEY = 'investment.news-rag-handoff';
+
 export const RESEARCH_PAGES = {
   'domain-research': ['learn', '금융 RAG 질문'],
   'research-documents': ['documents', 'RAG 문서 등록'],
@@ -12,6 +14,29 @@ export const RESEARCH_PAGES = {
   'research-calendar': ['calendar', '금융 캘린더'],
   ...Object.fromEntries(['선물 · 옵션', '펀드 · ETF', '채권 · 코인', '자산배분 · 퀀트'].map((name, i) => [`research-day-${i + 1}`, [`day-${i + 1}`, `${i + 1}일차 · ${name}`]])),
 };
+
+function consumeNewsHandoff(root, page) {
+  if (page !== 'domain-research') return;
+  let payload;
+  try {
+    const raw = sessionStorage.getItem(NEWS_RAG_HANDOFF_KEY);
+    if (!raw) return;
+    payload = JSON.parse(raw);
+    sessionStorage.removeItem(NEWS_RAG_HANDOFF_KEY);
+  } catch (error) {
+    console.warn('기사 분석 요청을 읽지 못했습니다.', error);
+    return;
+  }
+  if (!payload?.prompt || typeof payload.prompt !== 'string') return;
+  const input = root.getElementById('questionInput');
+  const sendButton = root.getElementById('sendBtn');
+  if (!input || !sendButton) return;
+  input.value = payload.prompt;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.focus();
+  // mountResearch가 모든 이벤트를 연결한 다음 클릭을 발생시켜 기존 채팅 흐름을 그대로 사용한다.
+  queueMicrotask(() => sendButton.click());
+}
 
 // Original code uses document selectors. Scope those selectors and all lifecycle
 // resources to this view, keeping the investment shell and its IDs untouched.
@@ -92,6 +117,7 @@ export async function domainResearchView(app, page = 'domain-research') {
     };
     context = createContext(root, body, view, onView);
     mountResearch(context);
+    consumeNewsHandoff(root, page);
   } catch (error) {
     if (abort.signal.aborted) return;
     context?.dispose();
