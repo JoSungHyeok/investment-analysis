@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>모의투자 실습 — JSH Learning</title>
+  <link rel="preload" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" />
+  <link rel="stylesheet" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" />
+  <link rel="stylesheet" href="../styles.css?v=26" />
+  <link rel="stylesheet" href="resource-pages.css" />
+</head>
+<body data-page="paper-trading">
+  <div id="overlay" class="overlay" onclick="closeSidebar()"></div>
+  <header class="topbar">
+    <button id="sidebar-toggle" class="topbar-toggle" type="button" onclick="toggleSidebar()" aria-label="메뉴 열기" aria-controls="sidebar" aria-expanded="true"><i class="fa-solid fa-bars"></i></button>
+    <a class="brand" href="../index.html" aria-label="대시보드로 이동">
+      <span class="brand-mark"><i class="fa-solid fa-chart-line" style="color:#fff"></i></span>
+      <span class="brand-text"><span class="brand-name">JSH Learning</span><small class="brand-sub">모의투자 · OpenAPI 실습</small></span>
+    </a>
+  </header>
+  <div class="layout">
+    <aside id="sidebar" class="sidebar" aria-label="메인 메뉴"><div id="sidebar-nav-slot"></div></aside>
+    <div class="content-wrap">
+      <main class="content-main"><section id="page-content" class="app-surface"></section></main>
+      <footer class="site-footer"><span class="footer-logo">JSH Learning</span><span class="footer-line">브라우저 로컬 모의계좌 · 실제 주문이 전송되지 않는 교육용 기능입니다.</span></footer>
+    </div>
+  </div>
+  <script src="../js/sidebarUI.js?v=4"></script>
+  <script src="../js/includeSidebar.js?v=1"></script>
+  <script type="module" src="../js/pages/paper-trading.js?v=1"></script>
+</body>
+</html>
