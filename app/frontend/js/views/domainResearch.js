@@ -2,6 +2,10 @@ import { mountResearch } from '../research/app.js';
 import { installTheory } from '../research/theory.js';
 
 const NEWS_RAG_HANDOFF_KEY = 'investment.news-rag-handoff';
+let researchShellHtml = null;
+
+// 기존 하단 회사정보 푸터는 전체 학습 앱에서 사용하지 않는다.
+document.querySelector('.site-footer')?.remove();
 
 export const RESEARCH_PAGES = {
   'domain-research': ['learn', 'AI 금융 질문'],
@@ -14,6 +18,14 @@ export const RESEARCH_PAGES = {
   'research-calendar': ['calendar', '금융 캘린더'],
   ...Object.fromEntries(['선물 · 옵션', '펀드 · ETF', '채권 · 코인', '자산배분 · 퀀트'].map((name, i) => [`research-day-${i + 1}`, [`day-${i + 1}`, `${i + 1}일차 · ${name}`]])),
 };
+
+async function loadResearchShell() {
+  if (researchShellHtml) return researchShellHtml;
+  const response = await fetch('/js/research/shell.html');
+  if (!response.ok) throw new Error('화면을 불러오지 못했습니다.');
+  researchShellHtml = await response.text();
+  return researchShellHtml;
+}
 
 function consumeNewsHandoff(root, page) {
   if (page !== 'domain-research') return;
@@ -35,6 +47,56 @@ function consumeNewsHandoff(root, page) {
   input.dispatchEvent(new Event('input', { bubbles: true }));
   input.focus();
   queueMicrotask(() => sendButton.click());
+}
+
+function normalizeResearchReference(source) {
+  const title = [source?.source_doc, source?.section].filter(Boolean).join(' · ') || '학습 문서';
+  return {
+    title,
+    score: Number(source?.score || 0),
+    content: source?.text || '',
+  };
+}
+
+async function researchFetch(url, options = {}, controller) {
+  const requestUrl = typeof url === 'string' ? url : String(url?.url || url);
+
+  // 구형 금융학습 화면은 /research/chat을 사용했지만 현재 백엔드 RAG API는
+  // /api/rag/ask를 POST로 제공한다. 여기서 요청/응답 모양을 호환시킨다.
+  if (requestUrl === '/research/chat' && String(options.method || 'GET').toUpperCase() === 'POST') {
+    let legacyPayload = {};
+    try {
+      legacyPayload = options.body ? JSON.parse(options.body) : {};
+    } catch {
+      legacyPayload = {};
+    }
+
+    const response = await globalThis.fetch('/api/rag/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: String(legacyPayload.question || '').trim(),
+        top_k: Number(legacyPayload.top_k || 4),
+        score_threshold: 0,
+        provider: 'rag',
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) return response;
+    const data = await response.json();
+    const mapped = {
+      answer: data.answer || '관련 문서를 찾지 못했습니다.',
+      references: (data.sources || []).map(normalizeResearchReference),
+    };
+    return new Response(JSON.stringify(mapped), {
+      status: response.status,
+      statusText: response.statusText,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  return globalThis.fetch(url, { ...options, signal: controller.signal });
 }
 
 function createContext(root, body, initialView, onView) {
@@ -65,7 +127,7 @@ function createContext(root, body, initialView, onView) {
     initialView: initialView.startsWith('day-') ? 'theory' : initialView,
     initialDay: initialView.startsWith('day-') ? Number(initialView.slice(4)) : null,
     onView,
-    fetch: (url, options = {}) => globalThis.fetch(url, { ...options, signal: controller.signal }),
+    fetch: (url, options = {}) => researchFetch(url, options, controller),
     setTimeout(fn, delay) { const id = globalThis.setTimeout(() => { timers.delete(id); fn(); }, delay); timers.add(id); return id; },
     clearTimeout(id) { timers.delete(id); globalThis.clearTimeout(id); },
     setInterval(fn, delay) { const id = globalThis.setInterval(fn, delay); intervals.add(id); return id; },
@@ -84,14 +146,15 @@ function createContext(root, body, initialView, onView) {
 export async function domainResearchView(app, page = 'domain-research') {
   const [view, label] = RESEARCH_PAGES[page] || RESEARCH_PAGES['domain-research'];
   document.title = `${label} · JSH Learning`;
-  app.innerHTML = '<p role="status">JSH Learning 금융 학습 기능을 불러오고 있습니다…</p>';
   const abort = new AbortController();
   let context;
   window._viewCleanup = () => { abort.abort(); context?.dispose(); };
+
+  // 기존 화면을 바로 지우지 않고 새 금융학습 화면이 준비된 뒤 교체해
+  // 메뉴 클릭 시 흰 화면/로딩 문구가 순간적으로 나타나는 현상을 줄인다.
+  app.setAttribute('aria-busy', 'true');
   try {
-    const response = await fetch('/js/research/shell.html', { signal: abort.signal });
-    if (!response.ok) throw new Error('화면을 불러오지 못했습니다.');
-    const html = await response.text();
+    const html = await loadResearchShell();
     if (abort.signal.aborted) return;
     const host = document.createElement('section');
     host.className = 'jsh-learning-module jsh-learning-research';
@@ -101,7 +164,6 @@ export async function domainResearchView(app, page = 'domain-research') {
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
       <link rel="stylesheet" href="/js/research/integration.css">
       <div class="domain-body">${html}</div>`;
-    app.replaceChildren(host);
     const body = root.querySelector('.domain-body');
     const onView = active => {
       body.dataset.integratedView = active;
@@ -118,6 +180,7 @@ export async function domainResearchView(app, page = 'domain-research') {
     };
     context = createContext(root, body, view, onView);
     mountResearch(context);
+    app.replaceChildren(host);
     consumeNewsHandoff(root, page);
   } catch (error) {
     if (abort.signal.aborted) return;
@@ -127,5 +190,7 @@ export async function domainResearchView(app, page = 'domain-research') {
     message.textContent = 'JSH Learning 금융 학습 기능을 불러오지 못했습니다. 메뉴를 다시 선택해 주세요.';
     app.append(message);
     console.error(error);
+  } finally {
+    app.removeAttribute('aria-busy');
   }
 }
