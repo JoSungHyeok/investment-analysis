@@ -1,13 +1,18 @@
 """로그인 사용자별 모의투자 계좌 API.
 
 실제 증권사 주문은 전혀 전송하지 않으며 MongoDB에 교육용 가상현금, 보유자산,
-거래이력만 저장한다. auth 라우터에서 build_router(current_user)로 등록한다.
+거래이력만 저장한다. 시세는 국내주식은 네이버 공개 조회, 코인은 Upbit 공개 현재가
+API를 사용하고, 외부 조회 실패 시 명시적으로 실습 기준가로 폴백한다.
 """
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 from datetime import datetime, timezone
+import json
 from typing import Callable
+import urllib.parse
+import urllib.request
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -40,6 +45,76 @@ class PaperOrderRequest(BaseModel):
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _json_get(url: str) -> object:
+    request = urllib.request.Request(
+        url,
+        headers={"Accept": "application/json", "User-Agent": "JSH-Learning-PaperTrading/1.0"},
+    )
+    with urllib.request.urlopen(request, timeout=3) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _fetch_stock_quote(symbol: str) -> float:
+    query = urllib.parse.quote(f"SERVICE_ITEM:{symbol}")
+    payload = _json_get(f"https://polling.finance.naver.com/api/realtime?query={query}")
+    areas = payload.get("result", {}).get("areas", []) if isinstance(payload, dict) else []
+    data = areas[0].get("datas", []) if areas else []
+    price = data[0].get("nv") if data else None
+    if not isinstance(price, (int, float)) or price <= 0:
+        raise ValueError("국내주식 현재가를 찾을 수 없습니다.")
+    return float(price)
+
+
+def _fetch_coin_quotes(symbols: list[str]) -> dict[str, float]:
+    if not symbols:
+        return {}
+    markets = ",".join(f"KRW-{symbol}" for symbol in symbols)
+    payload = _json_get(f"https://api.upbit.com/v1/ticker?markets={urllib.parse.quote(markets, safe=',-')}")
+    if not isinstance(payload, list):
+        raise ValueError("코인 현재가 응답 형식이 올바르지 않습니다.")
+    result: dict[str, float] = {}
+    for row in payload:
+        market = row.get("market", "") if isinstance(row, dict) else ""
+        price = row.get("trade_price") if isinstance(row, dict) else None
+        if market.startswith("KRW-") and isinstance(price, (int, float)) and price > 0:
+            result[market.removeprefix("KRW-")] = float(price)
+    return result
+
+
+async def _quotes() -> dict[str, dict]:
+    fetched_at = _now().isoformat()
+    result = {
+        symbol: {
+            "symbol": symbol,
+            "name": asset["name"],
+            "type": asset["type"],
+            "price": float(asset["reference_price"]),
+            "source": "reference",
+            "live": False,
+            "fetched_at": fetched_at,
+        }
+        for symbol, asset in ASSETS.items()
+    }
+
+    stock_symbols = [symbol for symbol, asset in ASSETS.items() if asset["type"] == "주식"]
+    stock_tasks = [asyncio.to_thread(_fetch_stock_quote, symbol) for symbol in stock_symbols]
+    stock_results = await asyncio.gather(*stock_tasks, return_exceptions=True)
+    for symbol, price in zip(stock_symbols, stock_results):
+        if isinstance(price, (int, float)) and price > 0:
+            result[symbol].update({"price": float(price), "source": "naver", "live": True})
+
+    coin_symbols = [symbol for symbol, asset in ASSETS.items() if asset["type"] == "코인"]
+    try:
+        coin_prices = await asyncio.to_thread(_fetch_coin_quotes, coin_symbols)
+    except Exception:
+        coin_prices = {}
+    for symbol, price in coin_prices.items():
+        if symbol in result and price > 0:
+            result[symbol].update({"price": float(price), "source": "upbit", "live": True})
+
+    return result
 
 
 def _new_account(user_id) -> dict:
@@ -96,6 +171,17 @@ def _serialize(account: dict) -> dict:
 
 def build_router(current_user: Callable) -> APIRouter:
     router = APIRouter(prefix="/paper", tags=["모의투자"])
+
+    @router.get("/quotes")
+    async def paper_quotes() -> dict:
+        quotes = await _quotes()
+        live_count = sum(1 for quote in quotes.values() if quote["live"])
+        return {
+            "items": list(quotes.values()),
+            "live_count": live_count,
+            "total_count": len(quotes),
+            "note": "외부 현재가 조회 실패 종목은 실습 기준가로 표시됩니다.",
+        }
 
     @router.get("/account")
     async def paper_account(user: dict = Depends(current_user)) -> dict:
