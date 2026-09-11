@@ -3238,6 +3238,17 @@ KOREAN_SEARCH_ALIASES = {
 }
 
 
+@app.get("/api/home/stock-news")
+def stock_news(category: str = "korea"):
+    from .stock_news import get_news, QUERIES
+    if category not in QUERIES:
+        raise HTTPException(status_code=422, detail="지원하지 않는 뉴스 분류입니다.")
+    try:
+        return get_news(category)
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
 @app.get("/api/home/chart-search")
 def home_chart_search(q: str = "") -> dict[str, object]:
     """Yahoo Finance 자동완성과 기본 대표 종목으로 차트 검색 결과를 제공한다."""

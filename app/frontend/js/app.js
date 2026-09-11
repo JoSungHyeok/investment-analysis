@@ -1,3 +1,5 @@
+import { stockNewsView } from './views/stockNews.js';
+import { domainResearchView, RESEARCH_PAGES } from './views/domainResearch.js';
 import { homeView }            from './views/home.js';
 import { serverResourcesView } from './views/serverResources.js';
 import { volumeCloudView }    from './views/volumeCloud.js';
@@ -184,6 +186,8 @@ const quizDayRoutes = Object.fromEntries(
 );
 
 const routes = {
+  'stock-news': { label: '주식 기사', render: () => stockNewsView(app) },
+  ...Object.fromEntries(Object.entries(RESEARCH_PAGES).map(([key, [, label]]) => [key, { label, render: () => domainResearchView(app, key) }])),
   'home':              { label: '대시보드',               render: () => homeView(app, navigate) },
   'server-resources':  { label: '서버 리소스',             render: () => serverResourcesView(app) },
   'volume-cloud':     { label: '거래량 클라우드',          render: () => volumeCloudView(app) },
@@ -404,6 +408,7 @@ function navigate(view) {
   if (['server-resources', 'world-markets', 'asset-classes', 'today-gainers', 'today-sobujang', 'volume-cloud', 'sector-cloud', 'global-capital-map'].includes(view)) activeSections.push('visualization');
   if (_portfolioViews.includes(view)) activeSections.push('portfolio');
   if (_practiceViews.includes(view)) activeSections.push('practice');
+  if (view === 'domain-research' || view?.startsWith('research-')) activeSections.push('research');
   if (_aiViews.includes(view)) activeSections.push('aitools');
   if (typeof window._setActiveNavSections === 'function') window._setActiveNavSections(activeSections);
 
